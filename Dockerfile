@@ -25,7 +25,7 @@ COPY --from=builder /app/prisma/schema.prisma /app/prisma/schema.prisma
 COPY --from=builder /app/node_modules/@prisma/client /app/node_modules/@prisma/client/
 COPY --from=builder /app/node_modules/.prisma /app/node_modules/.prisma/
 
-COPY --from=builder /app/prisma/order.db /app/prisma/order.db
+COPY --from=builder /app/prisma/orders.db /app/prisma/orders.db
 
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
