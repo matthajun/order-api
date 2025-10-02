@@ -1,4 +1,9 @@
-import {BadRequestException, Injectable, InternalServerErrorException, Logger} from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import {
   CreateOrderDto,
@@ -13,12 +18,12 @@ export class OrderService {
   async getOrdersByUser(userId: number, take: number, skip: number) {
     const [data, totalCount] = await this.prisma.$transaction([
       this.prisma.user.findUnique({
-        where: {id: userId},
+        where: { id: userId },
         include: {
           orders: {
             take,
             skip,
-            orderBy: {id: 'desc'},
+            orderBy: { id: 'desc' },
             select: {
               id: true,
               productId: true,
@@ -29,7 +34,7 @@ export class OrderService {
       }),
 
       this.prisma.order.count({
-        where: {userId: userId},
+        where: { userId: userId },
       }),
     ]);
 
@@ -45,16 +50,16 @@ export class OrderService {
 
   async createOrders(orderList: CreateOrderDto[]) {
     // 1. Find users
-    const userIds = orderList.map(order => order.userId);
-    const userValidationPromises = userIds.map(userId =>
-        this.prisma.user.findUnique({
-          where: { id: userId },
-          select: { id: true }
-        })
+    const userIds = orderList.map((order) => order.userId);
+    const userValidationPromises = userIds.map((userId) =>
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true },
+      }),
     );
     const users = await Promise.all(userValidationPromises);
     for (const userId of userIds) {
-      if (!users.some(user => user?.id === userId )) {
+      if (!users.some((user) => user?.id === userId)) {
         this.logger.warn(`This is attempt by Non-existent user ID: ${userId}`);
         throw new BadRequestException(`User with ID ${userId} not found.`);
       }
