@@ -16,9 +16,7 @@ export class OrderController {
 
   @Get()
   getOrders(@Query() { userId, take = 10, skip = 0 }: GetOrdersRequestDto) {
-    const id = userId;
-    if (!id) throw new BadRequestException('userId is required');
-    return this.orderService.getOrdersByUser(id, take, skip);
+    return this.orderService.getOrdersByUser(userId, take, skip);
   }
 
   @Post()
