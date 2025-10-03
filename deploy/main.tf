@@ -18,16 +18,91 @@ resource "aws_ecs_cluster" "app_cluster" {
 
 # --- EC2 Auto Scaling Group (ECS Container Instances) ---
 # 기존 VPC ID와 서브넷 ID를 사용하거나, 별도로 생성해야 합니다.
-variable "vpc_id" {
-  description = "Existing VPC ID"
-  type        = string
-  default     = "vpc-083e33a4159796273"
+# variable "vpc_id" {
+#   description = "Existing VPC ID"
+#   type        = string
+#   default     = "vpc-083e33a4159796273"
+# }
+
+# variable "subnet_ids" {
+#   description = "List of existing public subnet IDs for ASG"
+#   type        = list(string)
+#   default     = ["subnet-0b9e50ed58fa3d6ab", "subnet-027ea6b79ce8879fa"] # 실제 서브넷 ID로 변경
+# }
+
+resource "aws_vpc" "main" {
+  cidr_block           = "10.0.0.0/16" # 원하는 CIDR 블록으로 변경
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  tags = {
+    Name = "my-main-vpc"
+  }
 }
 
-variable "subnet_ids" {
-  description = "List of existing public subnet IDs for ASG"
-  type        = list(string)
-  default     = ["subnet-0b9e50ed58fa3d6ab", "subnet-027ea6b79ce8879fa"] # 실제 서브넷 ID로 변경
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "main-internet-gateway"
+  }
+}
+
+resource "aws_subnet" "public_a" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = "10.0.5.0/24" # 원하는 CIDR 블록
+  availability_zone = "ap-northeast-2a" # 원하는 가용 영역
+
+  tags = {
+    Name = "public-subnet-a"
+  }
+}
+
+resource "aws_subnet" "public_b" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = "10.0.6.0/24" # 다른 AZ에 다른 CIDR
+  availability_zone = "ap-northeast-2b"
+  tags = {
+    Name = "public-subnet-b"
+  }
+}
+
+resource "aws_route_table" "public_a" {
+  vpc_id = aws_vpc.main.id
+
+  # 0.0.0.0/0 트래픽을 인터넷 게이트웨이로 라우팅
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id # 위에서 정의한 IGW ID
+  }
+
+  tags = {
+    Name = "public-route-table"
+  }
+}
+
+resource "aws_route_table" "public_b" {
+  vpc_id = aws_vpc.main.id
+
+  # 0.0.0.0/0 트래픽을 인터넷 게이트웨이로 라우팅
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id # 위에서 정의한 IGW ID
+  }
+
+  tags = {
+    Name = "public-route-table"
+  }
+}
+
+resource "aws_route_table_association" "public_a" {
+  subnet_id      = aws_subnet.public_a.id # 당신의 퍼블릭 서브넷 ID
+  route_table_id = aws_route_table.public_a.id
+}
+
+resource "aws_route_table_association" "public_b" {
+  subnet_id      = aws_subnet.public_b.id # 또 다른 퍼블릭 서브넷 ID
+  route_table_id = aws_route_table.public_b.id
 }
 
 # Launch Template for ECS Container Instances
@@ -89,7 +164,7 @@ resource "aws_iam_role" "ecs_instance_role" {
 
 resource "aws_iam_role_policy_attachment" "ecs_instance_role_policy_ec2_container_service_for_ecs" {
   role       = aws_iam_role.ecs_instance_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSTransformApplicationECSDeploymentPolicy"
+  policy_arn = "arn:aws:iam::aws:policy/AmazonECS_FullAccess"
 }
 
 resource "aws_iam_instance_profile" "ecs_instance_profile" {
@@ -108,7 +183,7 @@ variable "vpc_cidr_block" {
 resource "aws_security_group" "ecs_instance_sg" {
   name        = "ecs-instance-sg"
   description = "Allow inbound traffic for ECS container instances"
-  vpc_id      = var.vpc_id
+  vpc_id      = aws_vpc.main.id
 
   ingress {
     from_port   = 0
@@ -149,8 +224,8 @@ resource "aws_security_group" "ecs_instance_sg" {
 # Auto Scaling Group
 resource "aws_autoscaling_group" "ecs_asg" {
   name                      = "ecs-asg-${aws_ecs_cluster.app_cluster.name}"
-  vpc_zone_identifier       = var.subnet_ids
-  desired_capacity          = 1
+  vpc_zone_identifier       = [aws_subnet.public_a.id, aws_subnet.public_b.id]
+  desired_capacity          = 3
   min_size                  = 1
   max_size                  = 3
   launch_template {
@@ -213,7 +288,7 @@ resource "aws_lb" "app_alb" {
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
-  subnets            = var.subnet_ids
+  subnets            = [aws_subnet.public_a.id, aws_subnet.public_b.id]
 
   tags = {
     Name = "order-app-alb"
@@ -224,8 +299,19 @@ resource "aws_lb_target_group" "app_tg" {
   name        = "my-app-tg"
   port        = 3000
   protocol    = "HTTP"
-  vpc_id      = var.vpc_id
+  vpc_id      = aws_vpc.main.id
   target_type = "ip"
+
+  health_check {
+    path                = "/health" # 애플리케이션의 헬스 체크 엔드포인트
+    protocol            = "HTTP"
+    port                = 3000
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    matcher             = "200"
+  }
 
   tags = {
     Name = "my-app-tg"
@@ -251,7 +337,7 @@ resource "aws_lb_listener" "http_listener" {
 resource "aws_security_group" "alb_sg" {
   name        = "alb-sg"
   description = "Allow HTTP/HTTPS traffic to ALB"
-  vpc_id      = var.vpc_id
+  vpc_id      = aws_vpc.main.id
 
   ingress {
     from_port   = 80
@@ -319,7 +405,7 @@ resource "aws_ecs_task_definition" "app_task" {
       environment = [ # 환경 변수 예시
         {
           name  = "DATABASE_URL"
-          value = "file:./prisma/order.db"
+          value = "file:./prisma/orders.db"
         }
       ]
     }
@@ -388,7 +474,7 @@ resource "aws_ecs_service" "app_service" {
   cluster         = aws_ecs_cluster.app_cluster.id
   task_definition = aws_ecs_task_definition.app_task.arn
   desired_count   = 1
-#   launch_type     = "EC2" # EC2 기반 서비스
+  # launch_type     = "EC2" # EC2 기반 서비스
 
   capacity_provider_strategy {
     capacity_provider = aws_ecs_capacity_provider.app_capacity_provider.name
@@ -407,7 +493,7 @@ resource "aws_ecs_service" "app_service" {
   }
 
   network_configuration {
-    subnets          = var.subnet_ids
+    subnets          = [aws_subnet.public_a.id, aws_subnet.public_b.id]
     security_groups  = [aws_security_group.ecs_instance_sg.id]
     assign_public_ip = false
   }
@@ -421,10 +507,11 @@ resource "aws_ecs_service" "app_service" {
     Name = "order-app-service"
   }
 
-  depends_on = [
-      aws_lb_listener.http_listener,
-      aws_lb_target_group.app_tg
-  ]
+  # triggers = {
+  #   task_definition_version = aws_ecs_task_definition.app_task.revision
+  # }
+
+  force_new_deployment = true
 }
 
 # --- ECS Service Auto Scaling Policy (태스크 수 조절) ---
@@ -482,7 +569,7 @@ resource "aws_route53_record" "app_domain_record" {
 
 resource "aws_security_group" "app_sg" {
   name_prefix = "app-sg-"
-  vpc_id      = var.vpc_id
+  vpc_id      = aws_vpc.main.id
 
   ingress { # ALB 보안 그룹으로부터 컨테이너 포트 인바운드 허용
     from_port       = 3000
